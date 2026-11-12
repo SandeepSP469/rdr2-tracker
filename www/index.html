@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RDR2 Personal Collector Map</title>
+    <!-- Tailwind CSS for styling -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Leaflet CSS for Map Engine -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <style>
+        #map { height: 100vh; width: 100%; background: #1a1a1a; }
+        .leaflet-container { background: #111827 !important; }
+    </style>
+</head>
+<body class="bg-gray-900 text-white flex h-screen overflow-hidden">
+
+    <!-- SIDEBAR: User Interface (Checklists & Categories) -->
+    <aside class="w-80 bg-gray-800 border-r border-gray-700 flex flex-col z-20">
+        <div class="p-4 border-b border-gray-700 flex justify-between items-center">
+            <h1 class="font-bold text-lg text-amber-500">RDR2 Tracker (Ad-Free)</h1>
+            <button id="sync-btn" class="text-xs bg-amber-600 hover:bg-amber-500 px-2 py-1 rounded">Cloud Sync</button>
+        </div>
+        <div class="p-4 border-b border-gray-700">
+            <input type="text" id="search-bar" placeholder="Search collectibles..." class="w-full bg-gray-900 border border-gray-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-amber-500">
+        </div>
+        <div id="checklist-container" class="flex-1 overflow-y-auto p-4 space-y-4">
+            <!-- Dynamic Category Checklists injected here -->
+        </div>
+    </aside>
+
+    <!-- MAP ENGINE VIEW -->
+    <main class="flex-1 relative">
+        <div id="map"></div>
+    </main>
+
+    <!-- Leaflet JS & App Logic -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script>
+        // CONFIGURATION: Paste your JSONBin details here for cloud sync
+        const BIN_ID = "6af59f92ffd5d16053bbc909";
+        const API_KEY = "$2a$10$W9/BAQdOvA636yb4B4/TL.JVKCB98ujkWU/Rc0WSk8dY85fTQUNEO";
+
+        // DATABASE / JSON: Your Collectibles Database
+        const collectiblesData = [
+            { id: "db_1", category: "Dinosaur Bones", name: "Bone #1: Heartlands Cliff", x: -110, y: 120 },
+            { id: "db_2", category: "Dinosaur Bones", name: "Bone #2: Big Valley Ridge", x: -200, y: 80 },
+            { id: "cc_1", category: "Cigarette Cards", name: "Card #1: Phineas T. Ramsbottom", x: -90, y: 150 },
+            { id: "dc_1", category: "Dreamcatchers", name: "Dreamcatcher #1: Roanoke Valley", x: -60, y: 50 }
+        ];
+
+        let collectedItems = new Set();
+        let markers = {};
+
+        // 1. Initialize Map Engine (Leaflet CRS.Simple for custom image maps)
+        const map = L.map('map', {
+            crs: L.CRS.Simple,
+            minZoom: -2,
+            maxZoom: 3,
+            zoomControl: false
+        });
+
+        // Bounds for custom map view
+        const bounds = [[-500, -500], [500, 500]];
+        L.imageOverlay('https://images.unsplash.com/photo-1509198397868-475647b2a1e5?auto=format&fit=crop&w=2000&q=80', bounds).addTo(map);
+        map.fitBounds(bounds);
+        L.control.zoom({ position: 'topright' }).addTo(map);
+
+        // Load saved state from Cloud or LocalStorage
+        async function loadProgress() {
+            if (BIN_ID !== "YOUR_BIN_ID_HERE") {
+                try {
+                    let res = await fetch(`https://api.jsonbin.io/v3/b/${BIN_ID}/latest`, {
+                        headers: { 'X-Master-Key': API_KEY }
+                    });
+                    let data = await res.json();
+                    collectedItems = new Set(data.record.collected || []);
+                } catch (e) { console.error("Cloud sync load failed, using local storage", e); }
+            }
+            if (collectedItems.size === 0) {
+                let local = JSON.parse(localStorage.getItem('rdr2_collected') || '[]');
+                collectedItems = new Set(local);
+            }
+            renderApp();
+        }
+
+        // Save progress to Cloud and LocalStorage
+        async function saveProgress() {
+            let arr = Array.from(collectedItems);
+            localStorage.setItem('rdr2_collected', JSON.stringify(arr));
+
+            if (BIN_ID !== "YOUR_BIN_ID_HERE") {
+                try {
+                    await fetch(`https://api.jsonbin.io/v3/b/${BIN_ID}`, {
+                        method: 'PUT',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'X-Master-Key': API_KEY
+                        },
+                        body: JSON.stringify({ collected: arr })
+                    });
+                } catch (e) { console.error("Cloud sync save failed", e); }
+            }
+        }
+
+        function toggleItem(id) {
+            if (collectedItems.has(id)) {
+                collectedItems.delete(id);
+            } else {
+                collectedItems.add(id);
+            }
+            saveProgress();
+            renderApp();
+        }
+
+        function renderApp() {
+            // Render Map Markers
+            collectiblesData.forEach(item => {
+                let isCollected = collectedItems.has(item.id);
+                let color = isCollected ? '#10B981' : '#F59E0B'; // Green if collected, Amber if pending
+
+                if (!markers[item.id]) {
+                    let marker = L.circleMarker([item.y, item.x], {
+                        radius: 8,
+                        color: '#fff',
+                        weight: 2,
+                        fillColor: color,
+                        fillOpacity: 0.9
+                    }).addTo(map);
+
+                    marker.bindPopup(`<b>${item.name}</b><br><button onclick="toggleItem('${item.id}')" class="mt-2 bg-amber-600 text-white px-2 py-1 text-xs rounded">${isCollected ? 'Mark Uncollected' : 'Mark Collected'}</button>`);
+                    markers[item.id] = marker;
+                } else {
+                    markers[item.id].setStyle({ fillColor: color });
+                }
+            });
+
+            // Render Sidebar Checklists grouped by category
+            let container = document.getElementById('checklist-container');
+            container.innerHTML = '';
+
+            let categories = [...new Set(collectiblesData.map(i => i.category))];
+            categories.forEach(cat => {
+                let items = collectiblesData.filter(i => i.category === cat);
+                let completedCount = items.filter(i => collectedItems.has(i.id)).length;
+
+                let div = document.createElement('div');
+                div.className = "bg-gray-900 rounded p-3 border border-gray-700";
+                div.innerHTML = `<h3 class="font-semibold text-sm text-amber-400 mb-2">${cat} (${completedCount}/${items.length})</h3>`;
+
+                let list = document.createElement('div');
+                list.className = "space-y-1";
+
+                items.forEach(item => {
+                    let isChecked = collectedItems.has(item.id);
+                    let row = document.createElement('label');
+                    row.className = "flex items-center space-x-2 text-xs text-gray-300 cursor-pointer hover:text-white";
+                    row.innerHTML = `<input type="checkbox" ${isChecked ? 'checked' : ''} onchange="toggleItem('${item.id}')" class="rounded bg-gray-800 border-gray-700 text-amber-500 focus:ring-0"> <span class="${isChecked ? 'line-through text-gray-500' : ''}">${item.name}</span>`;
+                    list.appendChild(row);
+                });
+
+                div.appendChild(list);
+                container.appendChild(div);
+            });
+        }
+
+        document.getElementById('sync-btn').addEventListener('click', () => {
+            loadProgress();
+            alert("Synced with Cloud!");
+        });
+
+        loadProgress();
+    </script>
+</body>
+</html>
